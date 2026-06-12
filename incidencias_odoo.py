@@ -58,7 +58,7 @@ DIAS_LIMITE = 3
 # que los liste. Las sucursales sin supervisor asignado quedan sin asignar
 # (caen en "Nueva" y las reparte quien administre el tablero).
 SUPERVISORES = {
-    # "CENTRO": 12,
+ "CENTRO": 12,
     # "CONCHI": 15,
     # "CARRASCO": 12,
     # ...
