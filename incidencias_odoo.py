@@ -1,28 +1,26 @@
 """
 incidencias_odoo.py
 ====================
-Módulo para convertir las incongruencias del cruce de inventario
-en TAREAS de la app Proyecto de Odoo (compatible con Odoo SaaS,
-sin módulos custom — todo vía XML-RPC estándar).
+Módulo de apoyo (NO es una app — lo importa streamlit_app.py).
+
+Convierte las incongruencias del cruce de inventario en TAREAS de la app
+Proyecto de Odoo (compatible con Odoo SaaS, sin módulos custom, todo vía
+XML-RPC estándar).
 
 Ciclo que implementa:
   1. Asegura que exista el proyecto "Incidencias de Inventario" y sus etapas.
-  2. Calcula el MONTO de cada diferencia (diferencia × precio de venta)
+  2. Calcula el MONTO de cada diferencia (diferencia x precio de venta)
      y asigna prioridad por dinero.
   3. Crea una tarea por incongruencia, asignada al supervisor de la tienda
-     (Odoo le manda correo automáticamente al asignar).
-  4. ANTI-DUPLICADOS: usa una clave [folio|producto] en el nombre de la tarea.
-     Si ya existe, actualiza en lugar de duplicar.
-  5. AUTO-CIERRE: si en un cruce posterior la diferencia ya no aparece,
-     mueve la tarea a "Resuelta" con un comentario automático.
-
-Cómo integrarlo en tu app de Streamlit: ver el bloque al final del archivo.
-
-REQUISITO en el cruce: el DataFrame debe incluir la columna 'ProductoID'
-(el id del producto en Odoo). Ver "PARCHE AL CRUCE" al final.
+     (Odoo le manda correo automáticamente al asignar; OJO: en bases de
+     prueba duplicadas, Odoo desactiva el envío de correos).
+  4. ANTI-DUPLICADOS: usa una clave [folio|producto] en el nombre de la
+     tarea. Si ya existe abierta, actualiza en lugar de duplicar.
+  5. AUTO-CIERRE: si en un cruce posterior la diferencia ya no aparece
+     (y el folio sí se re-verificó), mueve la tarea a "Resuelta" con un
+     comentario automático.
 """
 
-import xmlrpc.client
 from datetime import datetime, timedelta
 
 # ============================================================
@@ -44,24 +42,18 @@ ETAPAS = [
 ETAPAS_CERRADAS = {"Resuelta", "Justificada", "No procede"}
 
 # Prioridad por DINERO (precio de venta x piezas de diferencia).
-# Ajusta este umbral con gerencia. En Odoo las tareas solo tienen
-# prioridad normal (0) o alta/estrella (1), así que:
-#   monto >= UMBRAL_PRIORIDAD_ALTA  -> estrella + etiqueta "$$$ Alta"
+# monto >= UMBRAL_PRIORIDAD_ALTA -> estrella + etiqueta "$$$ Prioridad alta"
+# Ajustar este umbral con gerencia.
 UMBRAL_PRIORIDAD_ALTA = 500.0   # pesos
 
-# Días hábiles aprox. para resolver (fecha límite de la tarea)
+# Días para resolver (fecha límite de la tarea)
 DIAS_LIMITE = 3
 
 # Mapeo SUCURSAL -> user_id del supervisor en Odoo (res.users).
-# *** LLENAR: estos ids son de los USUARIOS de Odoo, no de los contactos. ***
-# Para encontrarlos: Ajustes > Usuarios, o pregúntame y hacemos un script
-# que los liste. Las sucursales sin supervisor asignado quedan sin asignar
-# (caen en "Nueva" y las reparte quien administre el tablero).
+# *** LLENAR con los ids reales. ***
+# Las sucursales sin supervisor quedan sin asignar, en etapa "Nueva".
 SUPERVISORES = {
- "CENTRO": 12,
-    # "CONCHI": 15,
-    # "CARRASCO": 12,
-    # ...
+    # "CENTRO": 12,
 }
 
 # Etiquetas que se crean/reusan automáticamente
@@ -167,11 +159,12 @@ def _descripcion(row, precio, monto):
 
 def generar_incidencias(models, db, uid, pwd, df_incongruencias, progreso=None):
     """
-    df_incongruencias: SOLO filas con Estado FALTANTE o SOBRANTE,
-    con columnas: Folio Venta, Folio Compra, Sucursal, Producto, ProductoID,
-                  UdM, Surtido, Recibido, Diferencia, Estado, Docs Surtido, Docs Recepción
+    df_incongruencias: SOLO filas con Estado FALTANTE o SOBRANTE, con columnas:
+        Folio Venta, Folio Compra, Sucursal, Producto, ProductoID, UdM,
+        Surtido, Recibido, Diferencia, Estado, Docs Surtido, Docs Recepción
 
-    Devuelve dict con contadores: creadas, actualizadas, cerradas, sin_supervisor.
+    Recibe la conexión ya hecha (models, db, uid, pwd) — no maneja credenciales.
+    Devuelve dict: {'creadas', 'actualizadas', 'cerradas', 'sin_supervisor'}.
     """
     project_id, etapas = asegurar_proyecto(models, db, uid, pwd)
     tags = asegurar_tags(models, db, uid, pwd)
@@ -259,57 +252,3 @@ def generar_incidencias(models, db, uid, pwd, df_incongruencias, progreso=None):
 
     stats['sin_supervisor'] = sorted(stats['sin_supervisor'])
     return stats
-
-
-# ============================================================
-# INTEGRACIÓN EN STREAMLIT  (agregar en el TAB 2 de tu app,
-# debajo de la tabla de incongruencias filtradas)
-# ============================================================
-"""
-import incidencias_odoo as inc
-
-st.markdown("---")
-st.markdown("##### 📤 Enviar a corrección (Odoo)")
-st.caption("Crea una tarea por incongruencia en el proyecto de Odoo, "
-           "asignada al supervisor de cada tienda. No genera duplicados.")
-
-if st.button("📤 Generar casos en Odoo", type="primary"):
-    uid2, models2 = conectar_odoo()
-    if not uid2:
-        st.error("No se pudo conectar a Odoo.")
-    else:
-        barra = st.progress(0, text="Creando incidencias...")
-        def avance(n, total):
-            barra.progress(n / total, text=f"Procesando {n}/{total}...")
-
-        stats = inc.generar_incidencias(
-            models2, ODOO_DB, uid2, ODOO_PASS,
-            df[df['Estado'].isin(['FALTANTE', 'SOBRANTE'])],
-            progreso=avance,
-        )
-        barra.progress(1.0, text="¡Listo!")
-        st.success(
-            f"Creadas: {stats['creadas']} · Actualizadas: {stats['actualizadas']} · "
-            f"Cerradas automáticamente: {stats['cerradas']}"
-        )
-        if stats['sin_supervisor']:
-            st.warning("Sucursales sin supervisor mapeado (quedaron en 'Nueva', sin asignar): "
-                       + ", ".join(stats['sin_supervisor']))
-"""
-
-# ============================================================
-# PARCHE AL CRUCE: agregar ProductoID al DataFrame
-# ============================================================
-"""
-En tu función cruzar(), agrega la columna 'ProductoID' en los DOS
-resultados.append(...). Como `pid` ya existe en ambos bucles, solo es:
-
-    resultados.append({
-        'Folio Venta': folio_s,
-        'ProductoID': pid,        # <--- AGREGAR ESTA LÍNEA
-        'Folio Compra': ...,
-        ...
-    })
-
-(una vez en el bloque EN TRÁNSITO y otra en el bloque del cruce normal)
-"""
