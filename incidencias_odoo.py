@@ -53,7 +53,7 @@ DIAS_LIMITE = 3
 # *** LLENAR con los ids reales. ***
 # Las sucursales sin supervisor quedan sin asignar, en etapa "Nueva".
 SUPERVISORES = {
-    # "CENTRO": 12,
+    "CENTRO": 12,
 }
 
 # Etiquetas que se crean/reusan automáticamente
